@@ -1,0 +1,14 @@
+Package: termius-app
+Version: 7.58.4
+License: unknown
+Vendor: Termius Corporation <support@termius.com>
+Architecture: amd64
+Maintainer: Termius Corporation <support@termius.com>
+Installed-Size: 295299
+Depends: libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libuuid1, libsecret-1-0
+Recommends: libappindicator3-1
+Section: default
+Priority: optional
+Homepage: https://termius.com/
+Description: 
+  Desktop SSH Client

@@ -1,0 +1,282 @@
+#!/bin/bash
+#
+# Copyright (c) 2019 Termius Corporation.
+# Original version from Google Chrome, license is below.
+#
+# Copyright (c) 2009 The Chromium Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+#
+# It creates the repository configuration file for package updates, and it
+# monitors that config to see if it has been disabled by the overly aggressive
+# distro upgrade process (e.g.  intrepid -> jaunty). When this situation is
+# detected, the respository will be re-enabled. If the respository is disabled
+# for any other reason, this won't re-enable it.
+#
+# This functionality can be controlled by creating the $DEFAULTS_FILE and
+# setting "repo_add_once" and/or "repo_reenable_on_distupgrade" to "true" or
+# "false" as desired. An empty $DEFAULTS_FILE is the same as setting both values
+# to "false".
+
+# System-wide package configuration.
+DEFAULTS_FILE="/etc/default/termius-apt"
+
+APT_GET="`which apt-get 2> /dev/null`"
+APT_CONFIG="`which apt-config 2> /dev/null`"
+
+SOURCES_PREAMBLE="### THIS FILE IS AUTOMATICALLY CONFIGURED ###
+# You may comment out this entry, but any other modifications may be lost.\n"
+
+# sources.list setting for updates.
+REPOCONFIG="deb [arch=amd64 signed-by=/usr/share/keyrings/termius-2023.gpg,/usr/share/keyrings/termius-2026.gpg] https://deb.termius.com squeeze main"
+
+REPOCONFIG_ESCAPE_FOR_GREP="${REPOCONFIG//[/\\[}"
+REPOCONFIG_ESCAPE_FOR_SED="${REPOCONFIG_ESCAPE_FOR_GREP//,/\\,}"
+
+# Parse apt configuration and return requested variable value.
+apt_config_val() {
+  APTVAR="$1"
+  if [ -x "$APT_CONFIG" ]; then
+    "$APT_CONFIG" dump | sed -e "/^$APTVAR /"'!d' -e "s/^$APTVAR \"\(.*\)\".*/\1/"
+  fi
+}
+
+# Install the Termius repository signing keys, if they aren't already, and delete legacy keys
+update_keys() {
+  # Install 2023 signing key
+  if [ ! -f /usr/share/keyrings/termius-2023.gpg ]; then
+    (base64 -d > /usr/share/keyrings/termius-2023.gpg) <<KEYDATA
+mQINBF5gawUBEADOghs3nsZXfdH1KMj4eW5hIS35FQvQf8o78IC56/ZDj0uhSZvjQSqyEZdqwiuG
+d50agQwB2LsD3GyIoaDV/t4K4dVh/hQSOVmNf+2Wc5MEvUbvi8QFSq5etT8yayTCwYrsw0dZGmpV
+nAPnup5Dh496Ml3VlcOfkf6yp08ERyPX8E+9NybM1FdWWavdJgwsDLhz+GizFCOjwBe0Q+hjQ5qM
+4h6C15t2dJoWOcRWld92g842/qsIyUWzg3862eYAzpQHbHGvDIjk7xIafi+y/vwDTPbnUOwgoALp
+KG8r7R6xMKEaMcIIwjydTPe7muO8/+JddM6ezPlGjyOUpIV9/ak/qA4nCs+fSuTC8jw/7E79PwIm
+f7TIuR3vc3SUfdDLOrJDbus/zYLEIveVGhpyAgT/q6T9397bQuyDyGWrKbKZBjs1yYVSMbfAjpme
+jDv7Gjy5dxIVYoHgenOkpNQQn4Cfz+Km6aLuzjcG3t1g0uDxyXduQDsDk4b+SdZ6wA65igPobfV2
+c7VW53H5atGrWfssP13PTyYUfZMz6HVlfEDmyLmGkJn8cu4WobrX4RgtwmzEeiLNr+ZiQ3pPTAUV
+eii7qw9vWj6d7almaBjfPSeanY+J3FUS5+Tquaz7Xpczf4kzrNJ2kvO6hu3Qtmb0m55PaTCdFXd+
+pCeLazodp4UbKQARAQABtFNEZWJpYW4gcGFja2FnZXIgKEEga2V5IGZvciBzaWduaW5nIFRlcm1p
+dXMgcmVsZWFzZXMgZm9yIERlYmlhbikgPGFkbWluQHRlcm1pdXMuY29tPokCVAQTAQgAPgIbAwUL
+CQgHAgYVCgkICwIEFgIDAQIeAQIXgBYhBFV6NIaGBNIlrBFsx3nN/SIs00laBQJkDnMWBQkLZWkR
+AAoJEHnN/SIs00lajCcQAMXur3tc655VtuPg0Il9/P9mtH3gOux5jRj/I1kLakO9muD9qyjWzQCY
+5ioz/Qj1vG81WnAznq8nPIgXaucPmMYjoaQpOYbmwpZuC9HPNZRCWDDgIP6p1YKoM8OqIwXmZjtJ
+DqvBeF+KpdIkwB29vzfh8UxVtF0vUnRZT/4g/Tdev9L2DF4KnF5YKQmzyEs+koHjxkLBnYaUzQRg
+NPbKjT1t0QTB47j0wU6dAF7Q3dkY4+qK4DYKyaXLYqvzxYBcPHdiH059ard+mPfcKhhEaQlCQ43p
+6HcbwtJOQYrdUKdLuFK1OC18Cu1vIaZZuauvRMf/seM6mzxMQsrzR/YZ60VeXkhTNYUvDkaS2wHd
+dF7FP2TAsc2iXoP4MaOij9Fnp78+QKWRoh5sx2YGKRCbloAjzajoDSUs6hC+qB3HwrDO6g5f1lpi
+aW2WxcbJp2Hhl5ex2dRBwdhmHxqomzQBfcybaQXfXKAhaKNuyB2z7/YPXii6izDwdYa6kMbWPuUt
+8fphvQyuB4/tYArIpVRxnWoZZrLhKskRQKAFDh1L5CdgVxScewj0aB5Y7VSRrH/xqUCHf61rK5+k
+BzcRZ8oz0vSwTpRzH++x/E7b6HFwub3CAV+bu5LgQsx56Ugr7XfUTrmZMcNrmyNzR3feVaAlFgXQ
+RG9qccfK06TVFrksKdoO
+KEYDATA
+  fi
+
+  # Install 2026 signing key
+  if [ ! -f /usr/share/keyrings/termius-2026.gpg ]; then
+    (base64 -d > /usr/share/keyrings/termius-2026.gpg) <<KEYDATA
+mQINBGQOdZsBEACqzZvaFLlVFscoez3GLn4kcBM+7w40Qw+TG/kjgR0AutjMd9BWHS9aRO69mLzj
+H272VeuIVHt0cuZ+KMLaRq3A10Fqse10Pz8sewgHKVIhoDHDlmKlF0tiejUxx/ZG70HHyayl2zGZ
+h6PHQGg5peUUh5NIpFIsV4cWAGBI8tUJiDibuAQZzVJKhNngVIzJmyZgcSh9bkNoKHmw3RMW9M0O
+S/7XKRqI2QX7MckWkMtbDWHW+6vh8sxw9Soxqux7GTGA2RiZX+MypNDO0JpDBccPKRY2TvXOb6nk
+GxJkMvUKzDQmvYLbg1+Z2+vuZR9Dg9KhBw6gnWUqh2hF2tJrI+v/wXaFr3rPYeyO4QXZeOJvaIEJ
+dCZaUMp6cf29GY+MVy5ioxep9ANZsnvgDfDZzo2QEMbH1U7M4HEiA/0/Cy5+I3QihnScqqjnWgxA
+jyubb7t+pCGKwktjqzRHBk4kZmCi8haMuuoaTeZvP/kz7POonnfh2QMw6K1MmDfdSvZEKOisM4Lx
+KSOkaKHUrzeWd33rrfcCn6gubHEcFgzuRBm8tGLCYNzSkdnduXlmmPLswc/VOaPRkU6+H5H0ntJ6
+P3M5/rpEXPInse06z0RJjteTncLwCDAJLMbRuzBhVPfZu0Eqxgx9BmoH/c4ysrlgzss9o4m/ujoo
+5L5Lf6GDTNhuPQARAQABtFNEZWJpYW4gcGFja2FnZXIgKEEga2V5IGZvciBzaWduaW5nIFRlcm1p
+dXMgcmVsZWFzZXMgZm9yIERlYmlhbikgPGFkbWluQHRlcm1pdXMuY29tPokCVAQTAQoAPgIbAwUL
+CQgHAgYVCgkICwIEFgIDAQIeAQIXgBYhBDBZRPDZ6tTgLLw33Q+ZrXKladMZBQJkDnrGBQkLRzor
+AAoJEA+ZrXKladMZ7KIP/RM9Tzi030f1mmlKf5XhwpaHPp9ZBs8DRyB67JMZsPMI9VuiYxVRrxEe
+0/i3nAlV8jINMTnwFt2lhl6EEkZocnjAv+0/d2/oJfhT6K6BajviHS7zpvIK6ZLZUDB8bThBWgQx
+g2L7sJZ2rvn7qu2skPAyHjjpZpLJy3M7OVbt2L6xavQ1sjcZfpKqykbvjTpoAWUruTNTcTA3ZWzA
+dpqYsfmbWbku9uVXRveJjo2DVd6FGyPoppRwD6K1ZDUnAU67EGbUi9sfafu0U5RMB9AXeDUIpSri
+IxVQMJlLtoJbghvoBNddr+Zt0Pw7udHjbE0LnZBmN6Fdq0rztVJ0Itfy8ixZbDFMG5R9fh3k1Is8
+XqXrseXULiop7zo3nw3vGo9JRoCf8DDuqgGiwvCW32y4luCbdE+iyQ/QeFBC1wVlnjXlip/9x+ac
+iTZrNm006ojOIFfZZSMrEQWv8WXc7UuErqOgKDZ8TYPj4bEqbBg9NV9IPqEi/o/LecMAFoDqIqda
+yHgCJ/CHCTvre4W7hijgFyLz/4s8gJak0XgFcEwDHbiybo71KbqrrKWxPRGEguref8bVXXO87TS7
++env1Cjd7UGequG1nkj5PMB2M57Ep92Q3Pxr/Rc5bf3tH+aCOIs6Bd7jznstho7kq0PqUISqK41Y
+bpAX0ohotnup87Kx94p8
+KEYDATA
+  fi
+
+  APT_KEY="`which apt-key 2> /dev/null`"
+  if [ ! -x "$APT_KEY" ]; then
+    return
+  fi
+
+  # Delete 2020 signing key
+  "$APT_KEY" del 2CD3495A >/dev/null 2>&1
+
+  # Delete 2019 signing key
+  "$APT_KEY" del 8D8E2096 >/dev/null 2>&1
+}
+
+# Set variables for the locations of the apt sources lists.
+find_apt_sources() {
+  APTDIR=$(apt_config_val Dir)
+  APTETC=$(apt_config_val 'Dir::Etc')
+  APT_SOURCES="$APTDIR/$APTETC/$(apt_config_val 'Dir::Etc::sourcelist')"
+  APT_SOURCESDIR="$APTDIR/$APTETC/$(apt_config_val 'Dir::Etc::sourceparts')"
+}
+
+# Update the Termius repository if it's not set correctly.
+# Note: this doesn't necessarily enable the repository, it just makes sure the
+# correct settings are available in the sources list.
+# Returns:
+# 0 - no update necessary
+# 2 - error
+update_bad_sources() {
+  if [ ! "$REPOCONFIG" ]; then
+    return 0
+  fi
+
+  find_apt_sources
+
+  SOURCELIST="$APT_SOURCESDIR/termius.list"
+  # Don't do anything if the file isn't there, since that probably means the
+  # user disabled it.
+  if [ ! -r "$SOURCELIST" ]; then
+    return 0
+  fi
+
+  # Basic check for active configurations (non-blank, non-comment lines).
+  ACTIVECONFIGS=$(grep -v "^[[:space:]]*\(#.*\)\?$" "$SOURCELIST" 2>/dev/null)
+
+  # Check if the correct repository configuration is in there.
+  REPOMATCH=$(grep "^[[:space:]#]*\b${REPOCONFIG_ESCAPE_FOR_GREP}\b" "$SOURCELIST" \
+    2>/dev/null)
+
+  # Check if the correct repository is disabled.
+  MATCH_DISABLED=$(echo "$REPOMATCH" | grep "^[[:space:]]*#" 2>/dev/null)
+
+  # Now figure out if we need to fix things.
+  BADCONFIG=1
+  if [ "$REPOMATCH" ]; then
+    # If it's there and active, that's ideal, so nothing to do.
+    if [ ! "$MATCH_DISABLED" ]; then
+      BADCONFIG=0
+    else
+      # If it's not active, but neither is anything else, that's fine too.
+      if [ ! "$ACTIVECONFIGS" ]; then
+        BADCONFIG=0
+      fi
+    fi
+  fi
+
+  if [ $BADCONFIG -eq 0 ]; then
+    return 0
+  fi
+
+  # At this point, either the correct configuration is completely missing, or
+  # the wrong configuration is active. In that case, just abandon the mess and
+  # recreate the file with the correct configuration. If there were no active
+  # configurations before, create the new configuration disabled.
+  DISABLE=""
+  if [ ! "$ACTIVECONFIGS" ]; then
+    DISABLE="#"
+  fi
+  printf "$SOURCES_PREAMBLE" > "$SOURCELIST"
+  printf "$DISABLE$REPOCONFIG\n" >> "$SOURCELIST"
+  if [ $? -eq 0 ]; then
+    return 0
+  fi
+  return 2
+}
+
+# Add the Termius repository to the apt sources.
+# Returns:
+# 0 - sources list was created
+# 2 - error
+create_sources_lists() {
+  if [ ! "$REPOCONFIG" ]; then
+    return 0
+  fi
+
+  find_apt_sources
+
+  SOURCELIST="$APT_SOURCESDIR/termius.list"
+  if [ -d "$APT_SOURCESDIR" ]; then
+    printf "$SOURCES_PREAMBLE" > "$SOURCELIST"
+    printf "$REPOCONFIG\n" >> "$SOURCELIST"
+    if [ $? -eq 0 ]; then
+      return 0
+    fi
+  fi
+  return 2
+}
+
+# Remove our custom sources list file.
+# Returns:
+# 0 - successfully removed, or not configured
+# !0 - failed to remove
+clean_sources_lists() {
+  if [ ! "$REPOCONFIG" ]; then
+    return 0
+  fi
+
+  find_apt_sources
+
+  rm -f "$APT_SOURCESDIR/termius.list"
+}
+
+# Detect if the repo config was disabled by distro upgrade and enable if
+# necessary.
+handle_distro_upgrade() {
+  if [ ! "$REPOCONFIG" ]; then
+    return 0
+  fi
+
+  find_apt_sources
+  SOURCELIST="$APT_SOURCESDIR/termius.list"
+  if [ -r "$SOURCELIST" ]; then
+    REPOLINE=$(grep -E "^[[:space:]]*#[[:space:]]*${REPOCONFIG_ESCAPE_FOR_GREP}[[:space:]]*# disabled on upgrade to .*" "$SOURCELIST")
+    if [ $? -eq 0 ]; then
+      sed -i -e "s,^[[:space:]]*#[[:space:]]*\(${REPOCONFIG_ESCAPE_FOR_SED}\)[[:space:]]*# disabled on upgrade to .*,\1," \
+        "$SOURCELIST"
+      LOGGER=$(which logger 2> /dev/null)
+      if [ "$LOGGER" ]; then
+        "$LOGGER" -t "$0" "Reverted repository modification: $REPOLINE."
+      fi
+    fi
+  fi
+}
+
+DEFAULT_ARCH="amd64"
+
+get_lib_dir() {
+  if [ "$DEFAULT_ARCH" = "i386" ]; then
+    LIBDIR=lib/i386-linux-gnu
+  elif [ "$DEFAULT_ARCH" = "amd64" ]; then
+    LIBDIR=lib/x86_64-linux-gnu
+  else
+    echo Unknown CPU Architecture: "$DEFAULT_ARCH"
+    exit 1
+  fi
+}
+
+## MAIN ##
+if [ -r "$DEFAULTS_FILE" ]; then
+  . "$DEFAULTS_FILE"
+else
+  repo_add_once="true"
+  repo_reenable_on_distupgrade="true"
+  echo "repo_add_once=\"true\"\nrepo_reenable_on_distupgrade=\"true\"\n" > "$DEFAULTS_FILE"
+fi
+
+update_keys
+
+if [ "$repo_add_once" = "true" ]; then
+  create_sources_lists
+  RES=$?
+  # Sources creation succeeded, so stop trying.
+  if [ $RES -ne 2 ]; then
+    sed -i -e 's/[[:space:]]*repo_add_once=.*/repo_add_once="false"/' "$DEFAULTS_FILE"
+  fi
+else
+  update_bad_sources
+fi
+
+if [ "$repo_reenable_on_distupgrade" = "true" ]; then
+  handle_distro_upgrade
+  update_keys
+fi
